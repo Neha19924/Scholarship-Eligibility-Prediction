@@ -1,0 +1,140 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, when
+from pyspark.ml.feature import StringIndexer, VectorAssembler
+from pyspark.ml.classification import DecisionTreeClassifier
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+from pyspark.ml import Pipeline
+import matplotlib.pyplot as plt
+
+
+
+spark = SparkSession.builder \
+    .appName("Scholarship Prediction") \
+    .getOrCreate()
+
+# 1. Create Spark Session
+
+
+df = spark.read.csv("C:/Users/Neha/Desktop/student_performance_updated_1000.csv", header=True, inferSchema=True)
+
+df.show(5)
+
+df = df.dropna()
+# Create Scholarship column
+df = df.withColumn(
+    "Scholarship",
+    when((col("FinalGrade") >= 75) & (col("ParentalSupport") == "High"), 1).otherwise(0)
+)
+
+# Encode categorical features
+gender_indexer = StringIndexer(inputCol="Gender", outputCol="GenderIndex")
+support_indexer = StringIndexer(inputCol="ParentalSupport", outputCol="SupportIndex")
+extra_indexer = StringIndexer(inputCol="ExtracurricularActivities", outputCol="ExtraIndex")
+
+# Feature vector
+assembler = VectorAssembler(
+    inputCols=[
+        "GenderIndex",
+        "SupportIndex",
+        "ExtraIndex",
+        "PreviousGrade",
+        "StudyHoursPerWeek",
+        "AttendanceRate",
+        "FinalGrade"
+    ],
+    outputCol="features"
+)
+
+# Model
+dt = DecisionTreeClassifier(labelCol="Scholarship", featuresCol="features")
+
+pipeline = Pipeline(stages=[
+    gender_indexer,
+    support_indexer,
+    extra_indexer,
+    assembler,
+    dt
+])
+
+# Train-test split
+train, test = df.randomSplit([0.8, 0.2], seed=42)
+
+model = pipeline.fit(train)
+
+predictions = model.transform(test)
+
+# Evaluation
+evaluator = MulticlassClassificationEvaluator(
+    labelCol="Scholarship",
+    predictionCol="prediction",
+    metricName="accuracy"
+)
+
+accuracy = evaluator.evaluate(predictions)
+
+print("Accuracy:", accuracy)
+
+predictions.select("Scholarship", "prediction").show(10)
+ #precision and recall
+precision = MulticlassClassificationEvaluator(
+    labelCol="Scholarship",
+    predictionCol="prediction",
+    metricName="weightedPrecision"
+).evaluate(predictions)
+
+recall = MulticlassClassificationEvaluator(
+    labelCol="Scholarship",
+    predictionCol="prediction",
+    metricName="weightedRecall"
+).evaluate(predictions)
+
+print("Precision:", precision)
+print("Recall:", recall)
+
+pdf = predictions.select("Scholarship", "prediction").toPandas()
+import matplotlib.pyplot as plt
+
+# Get trained Decision Tree model
+tree_model = model.stages[-1]
+
+# Feature importance values
+importances = tree_model.featureImportances.toArray()
+
+# Feature names (same order as VectorAssembler)
+features = [
+    "Gender",
+    "ParentalSupport",
+    "Extracurricular",
+    "PreviousGrade",
+    "StudyHours",
+    "Attendance",
+    "FinalGrade"
+]
+
+# Plot
+plt.figure(figsize=(8,5))
+plt.barh(features, importances)
+
+plt.xlabel("Importance Score")
+plt.ylabel("Features")
+plt.title("Feature Importance in Scholarship Prediction")
+
+plt.show()
+pdf = predictions.select("Scholarship").toPandas()
+
+pdf["Scholarship"].value_counts().plot(kind='bar')
+
+plt.xlabel("Scholarship (0 = No, 1 = Yes)")
+plt.ylabel("Count")
+plt.title("Distribution of Scholarship Eligibility")
+
+plt.show()
+pdf = predictions.select("Scholarship", "prediction").toPandas()
+
+pdf.groupby(["Scholarship", "prediction"]).size().unstack().plot(kind='bar')
+
+plt.title("Actual vs Predicted Comparison")
+plt.xlabel("Actual")
+plt.ylabel("Count")
+
+plt.show()
